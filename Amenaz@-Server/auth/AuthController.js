@@ -11,7 +11,7 @@ const pool = new Pool({
   host: 'localhost',
   database: 'amenazasdb',
   password: 'Anaporatumacaya',
-  port: 5432
+  port: 5432,
 });
 
 const APK_city = 'merida';
@@ -23,69 +23,109 @@ var config = require('../config');
 
 var VerifyToken = require('./VerifyToken');
 
-router.post('/register', function(req, res) {
+router.post('/register', function (req, res) {
   var hashedPassword = bcrypt.hashSync(req.body.password, 8);
-  const { fName, lName, addr, email, password, notifications } = req.body;
+  const { email, password, notifications } = req.body;
   console.log('INSERTING USER...');
-  console.log('With: ' + fName + ',' + lName + ',' + addr + ',' + email + ',' + hashedPassword + ',' + notifications);
+  console.log('With: ' + email + ',' + hashedPassword + ',' + notifications);
   pool.query(
-    'INSERT INTO merida.users (firstname, lastname, address, email, password, notifications) VALUES ($1, $2, $3, $4, $5, $6)',
-    [fName, lName, addr, email, hashedPassword, notifications],
+    'INSERT INTO public.users (email, password, notifications) VALUES ($1, $2, $3)',
+    [email, hashedPassword, notifications],
     (err, user) => {
       if (err) {
         console.log(err);
-        return res.status(500).send('There was a problem registering the user.');
+        return res.status(500).send('Error al registrar el usuario.');
       }
 
-      pool.query('SELECT * FROM merida.users WHERE email = $1', [email], (err, user) => {
-        if (err) return res.status(500).send('There was a problem finding the user.');
+      pool.query('SELECT * FROM public.users WHERE email = $1', [email], (err, user) => {
+        if (err) return res.status(500).send({ message: 'Error al consultar la BD.' });
         if (user.rowCount == 0) {
-          return res.status(404).send('No user found.');
+          return res.status(404).send({ message: 'Usuario no encontrado.' });
         }
         var token = jwt.sign({ id: user.rows[0].id }, config.secret, {
           algorithm: 'HS256',
-          expiresIn: 31536000 // expires in 1 year
+          expiresIn: 31536000, // expires in 1 year
         });
 
-        res.status(200).send({ auth: true, token: token });
+        res.status(200).send({
+          auth: true,
+          token: token,
+          email: user.rows[0].email,
+          firstname: user.rows[0].firstname,
+          lastname: user.rows[0].lastname,
+          address: user.rows[0].address,
+        });
       });
     }
   );
 });
 
-router.get('/user', VerifyToken, function(req, res, next) {
+router.post('/userUpdate', VerifyToken, function (req, res, next) {
   const id = parseInt(req.userId);
-  pool.query('SELECT * FROM merida.users WHERE id = $1', [id], (err, user) => {
-    if (err) return res.status(500).send('There was a problem finding the user.');
+  const { fName, lName, addr } = req.body;
+  console.log('UPDATING USER WITH ID: ' + id);
+  console.log('With: ' + fName + ',' + lName + ',' + addr);
+  pool.query(
+    'UPDATE public.users SET firstname = $1, lastname = $2, address = $3 WHERE id = $4',
+    [fName, lName, addr, id],
+    (err, user) => {
+      if (err) {
+        console.log(err);
+        return res.status(500).send({ message: 'Ha habido un problema al actualizar el usuario.' });
+      }
+      userUpdated = {
+        id: id,
+        message: 'Actualización de datos satisfactoria.',
+      };
+      res.status(200).send(userUpdated);
+    }
+  );
+});
+
+router.get('/user', VerifyToken, function (req, res, next) {
+  const id = parseInt(req.userId);
+  pool.query('SELECT * FROM public.users WHERE id = $1', [id], (err, user) => {
+    if (err) return res.status(500).send('Ha habido un problema al buscar en la BD.');
     if (user.rowCount == 0) {
-      return res.status(404).send('No user found.');
+      return res.status(404).send('Usuario no encontrado.');
     }
     user.rows[0].password = 0;
-    res.status(200).send(user.rows);
+    res.status(200).send(user.rows[0]);
   });
 });
 
-router.get('/logout', VerifyToken, function(req, res, next) {
+router.get('/userNameValidation', function (req, res) {
+  const userEmail = req.query.email;
+  console.log(userEmail);
+  pool.query('SELECT * FROM public.users WHERE email = $1', [userEmail], (err, user) => {
+    if (err) return res.status(500).send('Ha habido un problema al buscar en la BD.');
+    if (user.rowCount == 0) {
+      return res.status(200).send({ message: 'Usuario no encontrado.' });
+    }
+    res.status(404).send({ message: 'Usuario encontrado.' });
+  });
+});
+
+router.get('/logout', VerifyToken, function (req, res, next) {
   const id = parseInt(req.userId);
   userLogout = {
     id: id,
-    message: 'Cierre de sesión satisfactorio'
+    message: 'Cierre de sesión satisfactorio',
   };
   res.status(200).send(JSON.stringify(userLogout));
 });
 
-router.post('/login', function(req, res) {
+router.post('/login', function (req, res) {
   const email = req.body.email;
   if (!email) {
-    return res.status(500).send('No user send.');
+    return res.status(500).send('Falta parámetro requerido: correo-e.');
   }
-  pool.query('SELECT * FROM merida.users WHERE email = $1', [email], (err, user) => {
+  pool.query('SELECT * FROM public.users WHERE email = $1', [email], (err, user) => {
     if (err) {
-      console.log(err);
-      return res.status(500).send('There was a problem finding the user.');
+      return res.status(500).send('Ha habido un problema al consultar la BD.');
     }
     if (user.rowCount == 0) {
-      return res.status(404).send('No user found.');
+      return res.status(404).send('Usuario no encontrado.');
     }
     if (req.body.password) {
       password2Compare = req.body.password;
@@ -97,10 +137,17 @@ router.post('/login', function(req, res) {
 
     var token = jwt.sign({ id: user.rows[0].id }, config.secret, {
       algorithm: 'HS256',
-      expiresIn: 31536000 // expires in 1 year
+      expiresIn: 31536000, // expires in 1 year
     });
 
-    res.status(200).send({ auth: true, token: token });
+    res.status(200).send({
+      auth: true,
+      token: token,
+      email: user.rows[0].email,
+      firstname: user.rows[0].firstname,
+      lastname: user.rows[0].lastname,
+      address: user.rows[0].address,
+    });
   });
 });
 
